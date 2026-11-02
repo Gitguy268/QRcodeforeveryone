@@ -62,6 +62,10 @@ Contributions, issues, and feature requests are welcome! Feel free to check the 
 3. **Clearer Instructions:** Expanded the **Development** section to explain *how* to run it locally after cloning (e.g., just opening `index.html` or using a simple local server like `npx serve` or Python's `http.server`).
 4. **Professional Polish:** Rephrased some sentences in the "Features" and "How it works" sections to sound more engaging (e.g., highlighting "Privacy First"). Added a standard "Contributing" section at the bottom.
 
+<!-- live-links -->
+**Live:** [gitguy268.github.io/QRcodeforeveryone](https://gitguy268.github.io/QRcodeforeveryone/) · [qrcodeforeveryone.vercel.app](https://qrcodeforeveryone.vercel.app)
+<!-- /live-links -->
+
 <!-- run-steps:start -->
 ## Run it locally, step by step
 
