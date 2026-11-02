@@ -61,3 +61,17 @@ Contributions, issues, and feature requests are welcome! Feel free to check the 
 2. **Visual Appeal:** Added subtle emojis to section headers to make it easier to scan.
 3. **Clearer Instructions:** Expanded the **Development** section to explain *how* to run it locally after cloning (e.g., just opening `index.html` or using a simple local server like `npx serve` or Python's `http.server`).
 4. **Professional Polish:** Rephrased some sentences in the "Features" and "How it works" sections to sound more engaging (e.g., highlighting "Privacy First"). Added a standard "Contributing" section at the bottom.
+
+<!-- run-steps:start -->
+## Run it locally, step by step
+
+1. **Get the code:**
+
+   ```sh
+   git clone https://github.com/Gitguy268/QRcodeforeveryone.git
+   cd QRcodeforeveryone
+   ```
+
+2. **Open `index.html`** by double-clicking it. There is nothing to install or build.
+<!-- run-steps:end -->
+
