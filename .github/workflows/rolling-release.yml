@@ -1,0 +1,178 @@
+name: Rolling release
+
+# Keeps one GitHub Release, tagged `latest`, in step with the newest commit on `main`:
+# the tag is moved to that commit and the assets are rebuilt and replaced on every push.
+on:
+  workflow_run:
+    workflows: ["Deploy to GitHub Pages"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rolling-release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Offline web copy
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download the site that Pages deployed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh run list --workflow pages.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          fi
+          gh run download "$RUN_ID" --name github-pages --dir pages
+          mkdir site
+          tar -xf pages/artifact.tar -C site
+      - name: Package the offline copy
+        run: |
+          set -euo pipefail
+          pkg="pkg/QRcodeforeveryone"
+          mkdir -p "$pkg" out
+          mv site "$pkg/site"
+          cat > "$pkg/serve.py" << 'PYEOF'
+          #!/usr/bin/env python3
+          """Serve this app on http://127.0.0.1:PORT/QRcodeforeveryone/ and open it in your browser. Ctrl+C stops it."""
+          import http.server, os, socketserver, threading, webbrowser
+
+          SITE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site")
+          MOUNT = "/QRcodeforeveryone/"
+          PORT = int(os.environ.get("PORT", "24973"))
+
+
+          class Handler(http.server.SimpleHTTPRequestHandler):
+              extensions_map = {
+                  **http.server.SimpleHTTPRequestHandler.extensions_map,
+                  ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm",
+                  ".json": "application/json", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml",
+              }
+
+              def __init__(self, *a, **kw):
+                  super().__init__(*a, directory=SITE, **kw)
+
+              def send_head(self):
+                  path = self.path.split("?", 1)[0].split("#", 1)[0]
+                  if not path.startswith(MOUNT):
+                      self.send_response(302)
+                      self.send_header("Location", MOUNT)
+                      self.end_headers()
+                      return None
+                  self.path = "/" + self.path[len(MOUNT):]
+                  target = self.translate_path(self.path)
+                  if not os.path.exists(target) and os.path.exists(os.path.join(SITE, "404.html")):
+                      self.path = "/404.html"  # GitHub Pages does the same for unknown paths
+                  return super().send_head()
+
+              def end_headers(self):
+                  self.send_header("Cache-Control", "no-cache")
+                  super().end_headers()
+
+
+          class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+              daemon_threads = True
+
+
+          for port in range(PORT, PORT + 20):
+              try:
+                  server = Server(("127.0.0.1", port), Handler)
+                  break
+              except OSError:
+                  continue
+          else:
+              raise SystemExit(f"No free port between {PORT} and {PORT + 19}")
+
+          url = f"http://127.0.0.1:{port}{MOUNT}"
+          print(f"Serving {url}  (Ctrl+C or close this window to stop)")
+          threading.Timer(0.5, webbrowser.open, [url]).start()
+          try:
+              server.serve_forever()
+          except KeyboardInterrupt:
+              pass
+
+          PYEOF
+          cat > "$pkg/README.txt" << 'TXTEOF'
+          QRcodeforeveryone (offline copy)
+
+          Built from the latest commit by the rolling release. The app needs a local web server
+          (browsers block it when index.html is opened straight from disk), so use a launcher:
+
+            macOS    double-click start.command (first time: right-click > Open, because it is unsigned)
+            Linux    ./start.sh
+            Windows  double-click start.bat
+
+          All three run serve.py, which needs Python 3, and open http://127.0.0.1:24973/QRcodeforeveryone/ in your browser.
+          Close the window or press Ctrl+C to stop it.
+
+          Source, licence and issues: https://github.com/Gitguy268/QRcodeforeveryone
+
+          TXTEOF
+          printf '#!/bin/sh\ncd "$(dirname "$0")" && exec python3 serve.py\n' > "$pkg/start.command"
+          cp "$pkg/start.command" "$pkg/start.sh"
+          printf '@echo off\r\ncd /d "%%~dp0"\r\npython serve.py || py serve.py\r\npause\r\n' > "$pkg/start.bat"
+          chmod +x "$pkg/start.command" "$pkg/start.sh" "$pkg/serve.py"
+          (cd pkg && zip -qr -X "../out/QRcodeforeveryone-web.zip" "QRcodeforeveryone")
+          ls -l out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rolling-web
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    name: Update the rolling release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rolling-*
+          path: out
+          merge-multiple: true
+      - name: Move the latest tag and replace the assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          BRANCH: main
+          PRERELEASE: "false"
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          if [ -n "$(ls -A out)" ]; then (cd out && sha256sum -- * > SHA256SUMS.txt); fi
+          ls -l out
+          notes="Built automatically from the latest commit on \`$BRANCH\` ([\`${SHA::7}\`](https://github.com/$GH_REPO/commit/$SHA), $(date -u '+%Y-%m-%d %H:%M UTC')). This release is replaced on every push, so it can change at any time."
+          # Point the tag at this commit (create it the first time).
+          if gh api "repos/$GH_REPO/git/ref/tags/latest" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/latest" -f sha="$SHA" -F force=true > /dev/null
+          else
+            gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/latest -f sha="$SHA" > /dev/null
+          fi
+          if [ "$PRERELEASE" = true ]; then flags=(--prerelease --latest=false); else flags=(--prerelease=false --latest); fi
+          if gh release view latest > /dev/null 2>&1; then
+            gh release edit latest --title "Rolling Release" --notes "$notes" "${flags[@]}"
+            # Drop assets that this build no longer produces.
+            gh release view latest --json assets --jq '.assets[].name' | while IFS= read -r a; do
+              [ -e "out/$a" ] || gh release delete-asset latest "$a" --yes
+            done
+          else
+            gh release create latest --verify-tag --title "Rolling Release" --notes "$notes" "${flags[@]}"
+          fi
+          if [ -n "$(ls -A out)" ]; then gh release upload latest out/* --clobber; fi
